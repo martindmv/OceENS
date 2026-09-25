@@ -16,6 +16,7 @@ Course evaluation platform built for the EPF engineering school.
 | **Templating** | Jinja2 (server-side rendering) |
 | **Frontend** | HTML / CSS / JavaScript, no framework |
 | **Server** | Uvicorn |
+| **Packaging** | `pyproject.toml`, [uv](https://docs.astral.sh/uv/) with a committed `uv.lock` |
 | **Logging** | Python's standard `logging`, through Uvicorn's handlers |
 | **Exports** | Pandas (CSV) |
 | **Answer summaries** | Separate daemon calling an LLM (`requests-cache`, `markdown-it-py`) |
@@ -40,21 +41,14 @@ The shortest path from a fresh clone needs no Entra application and no LLM key: 
    docker compose up --build
    ```
 
-   **Without Docker** (needs Python 3.12). Call the virtual environment's executables by their path; on Windows, `Activate.ps1` is blocked by PowerShell's default execution policy.
+   **Without Docker**, with [uv](https://docs.astral.sh/uv/getting-started/installation/). `uv sync` creates `.venv`, installs the Python version pinned in `.python-version` if it is missing, the dependencies locked in `uv.lock`, and the `oceens` package itself. The same commands work on Windows, macOS and Linux, from any working directory inside the clone:
 
    ```bash
-   # macOS / Linux
-   python3.12 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
-   .venv/bin/uvicorn main:app --port 8000
+   uv sync
+   uv run uvicorn oceens.main:app --port 8000
    ```
 
-   ```powershell
-   # Windows (PowerShell)
-   py -3.12 -m venv .venv
-   .venv\Scripts\python.exe -m pip install -r requirements.txt
-   .venv\Scripts\uvicorn.exe main:app --port 8000
-   ```
+   `uv run oceens` does the same through the installed entry point, listening on `0.0.0.0:8000`.
 
 3. **Open <http://localhost:8000>** and sign in from `/dev/login` as any seeded user.
 
@@ -64,34 +58,34 @@ To check that the application actually works, follow the [smoke test](docs/smoke
 
 ### The summaries daemon
 
-Summaries are produced by a separate process, `summaries_generator_daemon.py`. The web application only queues requests in the `summaries` table; nothing is generated until the daemon runs. Start it next to the application:
+Summaries are produced by a separate process, `oceens.summaries_generator_daemon`. The web application only queues requests in the `summaries` table; nothing is generated until the daemon runs. Start it next to the application, through its entry point:
 
 ```bash
-.venv/bin/python summaries_generator_daemon.py        # Windows: .venv\Scripts\python.exe summaries_generator_daemon.py
+uv run oceens-summaries-daemon
 ```
 
-or set `RUN_SUMMARIES_DAEMON=1` in `.env` to have the application start it and stop it with itself. It loops, writes to the database and calls an external LLM service, so it only runs when you start it. Without `LLM_API_KEY`, every queued summary is marked as a configuration error and no call is made.
+or set `RUN_SUMMARIES_DAEMON=1` in `.env` to have the application start it and stop it with itself. It loops, writes to the database and calls an external LLM service, so it only runs when you start it. Without `LLM_API_KEY`, every queued summary is marked as a configuration error and no call is made. It caches LLM responses in `cache_llm.db`, in the working directory it was started from.
 
 ### Docker Compose
 
+The image installs the `oceens` package from `uv.lock` (`uv sync --locked`) and runs its `oceens` entry point: Uvicorn on `0.0.0.0:8000`, without `--reload`. After changing the code, rebuild with `docker compose up --build`. `.env` is never copied into the image.
+
 `docker-compose.yaml` builds the image, publishes port 8000, reads `.env` through `env_file` and restarts the container automatically. It mounts two host directories:
 
-- the database directory, `${LOCAL_DATABASE_DIR:-./database}` on `/app/database`, so the SQLite file survives a rebuild;
-- `./import` on `/app/import`, for the demonstration answers, which `.dockerignore` keeps out of the image.
-
-The image runs `uvicorn main:app --host 0.0.0.0 --port 8000`, without `--reload`: after changing the code, rebuild with `docker compose up --build`. `.env` is never copied into the image.
+- the database directory, `${LOCAL_DATABASE_DIR:-./database}` on `/app/database`, so the SQLite file survives a rebuild. Inside the container, `LOCAL_DATABASE_DIR` is always `/app/database`: the value in `.env` names the host directory;
+- `./src/oceens/import` over the installed package's `import/`, for the demonstration answers, which `.dockerignore` keeps out of the image.
 
 To stop and remove the container: `docker compose down`.
 
 ### In production
 
-`launch.sh` runs the application (`python main.py`) and the summaries daemon in two `screen` sessions on the production server. It hardcodes the server's path, `/home/mde-admin/OceENS`, and creates its own `venv/` there.
+`launch.sh` runs `uv sync --locked`, then the `oceens` and `oceens-summaries-daemon` entry points in two `screen` sessions on the production server. It hardcodes the server's path, `/home/mde-admin/OceENS`, and needs `uv` installed there.
 
 ---
 
 ## Configuration
 
-The application reads its configuration from environment variables, and loads `.env` from the working directory at startup. `.env.example` lists every variable with its default; this section is the reference for what each one does.
+The application reads its configuration from environment variables, and loads `.env` from the project root at startup; a variable already set in the environment wins over `.env`. `.env.example` lists every variable with its default; this section is the reference for what each one does.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
@@ -101,7 +95,7 @@ The application reads its configuration from environment variables, and loads `.
 | <a id="secret_key"></a>`SECRET_KEY` | *(unset)* | Signs the session cookies: anyone who knows it can forge a session, an administrator's included. **Required with `AUTH_MODE=entra`**: missing or empty, the application logs a critical error and exits with code 1. In `dev`, when unset, a random key is drawn at each start (with a warning), and sessions are lost on restart. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
 | `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `ENTRA_TENANT_ID` | *(unset)* | The Entra ID application's credentials. Required with `AUTH_MODE=entra`: if one is missing the application exits with code 1. Not read in `dev`. |
 | `REDIRECT_URI` | `https://localhost/auth/callback` | Where Entra ID redirects after sign-in; must match the application's registration. `entra` only. |
-| `LOCAL_DATABASE_DIR` | `database/` at the project root | Directory of the SQLite file `db_oceens.db`, created if missing. A relative path is resolved from the project root. With Docker Compose, it is the host directory mounted on `/app/database`. |
+| `LOCAL_DATABASE_DIR` | `database/` at the project root | Directory of the SQLite file `db_oceens.db`, created if missing. A relative path is resolved from the project root. With Docker Compose, it is the host directory mounted on `/app/database`, and the container itself always uses `/app/database`. |
 | `LLM_API_KEY` | *(empty)* | API key of the default LLM provider, *Ollama EPF*. Empty: the application runs, and requested summaries are marked as a configuration error. Other providers read their own variable, see [LLM providers](#llm-providers-answer-summaries). |
 | `RUN_SUMMARIES_DAEMON` | *(unset)* | `1`, `true`, `yes` or `on`: the application starts the summaries daemon as a child process and stops it on shutdown. Leave unset where `launch.sh` already runs the daemon. |
 
@@ -124,7 +118,7 @@ Several scopes are separated by `;` (for example `program_manager:MDAI4;MDAI5`).
 
 ### Demonstration data
 
-On an empty database, the seed (`core/seed.py`) inserts four surveys with answers, and users you can sign in as with the development sign-in:
+On an empty database, the seed (`src/oceens/core/seed.py`) inserts four surveys with answers, and users you can sign in as with the development sign-in:
 
 | User | Roles |
 |------|-------|
@@ -136,7 +130,7 @@ On an empty database, the seed (`core/seed.py`) inserts four surveys with answer
 | `oceens.campus-manager@epf.fr` | `campus_manager:Montpellier` only |
 | `bob.leponge@epfedu.fr` and 17 others | none (student) |
 
-Programs are synchronised from `import/Program_list.csv` at every start; the rest is seeded only when the database has no user.
+Programs are synchronised from `src/oceens/import/Program_list.csv` at every start; the rest is seeded only when the database has no user.
 
 ---
 
@@ -184,7 +178,7 @@ In `dev`, the session cookie is no longer restricted to HTTPS (so `http://localh
 In a browser, `GET /dev/login` lists the database's users, grouped by role name without scope (a user with no role appears under `student`, a user with several roles under each of them). A click signs in as that user; a free field accepts any other address, with an optional name. When `DEV_LOGIN_KEY` is set, a single key field shows and serves every sign-in on the page; the key is never stored in the session.
 
 ```bash
-AUTH_MODE=dev DEV_LOGIN_KEY=my-key .venv/bin/uvicorn main:app
+AUTH_MODE=dev DEV_LOGIN_KEY=my-key uv run uvicorn oceens.main:app
 
 # Sign in as a seeded admin; -c stores the session cookie
 curl -i -c cookies.txt \
@@ -261,7 +255,7 @@ The SQLite database is not encrypted and ends up in backups, so **no API key is 
 
 ### Exhausted credit and other provider errors
 
-Each provider reports failures in its own format: exhausted credit is a `429 insufficient_quota` at OpenAI, but a `400 "Your credit balance is too low"` at Anthropic. `services/llm_client.py` normalises these responses into categories (`quota`, `rate_limit`, `auth`, `model`, `server`) and derives a readable message from them, in French, which is written to `Summary.metadata_text` instead of the raw JSON, so a failed summary explains itself in the interface. The provider's raw response stays in the daemon's logs.
+Each provider reports failures in its own format: exhausted credit is a `429 insufficient_quota` at OpenAI, but a `400 "Your credit balance is too low"` at Anthropic. `src/oceens/services/llm_client.py` normalises these responses into categories (`quota`, `rate_limit`, `auth`, `model`, `server`) and derives a readable message from them, in French, which is written to `Summary.metadata_text` instead of the raw JSON, so a failed summary explains itself in the interface. The provider's raw response stays in the daemon's logs.
 
 > [!IMPORTANT]
 > The **Tester** button does not stop at listing models: at OpenAI as at Anthropic, `GET /v1/models` still answers normally with a zero balance. A one-token generation (negligible cost) is sent next; it is the only way to spot exhausted credit **before** starting a summary campaign.
@@ -310,7 +304,7 @@ A summary cannot be priced when its counts are missing (generated before this fe
 
 ## Logging
 
-Application logs use Python's standard `logging` module and the `uvicorn` logger, so messages from the application, `core/auth.py` and `core/seed.py` share the server's format, colours and handlers.
+Application logs use Python's standard `logging` module and the `uvicorn` logger, so messages from the application, `src/oceens/core/auth.py` and `src/oceens/core/seed.py` share the server's format, colours and handlers.
 
 | Level | Use |
 |-------|-----|
@@ -333,7 +327,7 @@ except Exception:
     logger.exception("Operation failed")
 ```
 
-New diagnostics use the appropriate logger rather than `print()`. The application level is set to `DEBUG` in `core/dependencies.py`. Logs go through Uvicorn's handler, usually to `stderr`; redirect it (`2> error.log`) to keep them.
+New diagnostics use the appropriate logger rather than `print()`. The application level is set to `DEBUG` in `src/oceens/core/dependencies.py`. Logs go through Uvicorn's handler, usually to `stderr`; redirect it (`2> error.log`) to keep them.
 
 ---
 
@@ -349,7 +343,7 @@ A client-side selector filters the visualisation without reloading: only the cho
 
 ### Surveys imported from Excel
 
-`survey_loader_from_xlsx.py` is a command-line tool that imports a survey from a syllabus and a form export: `python survey_loader_from_xlsx.py SYLLABUS FORMS PROGRAM SEMESTER YEAR`. The surveys it loads have no `QCU_Attendance` question, so `services/visualisation_data.py` falls back on `satisfaction_responses_count` as the denominator of the teacher score. Teacher names are normalised with `.title()` on import and on aggregation, so case variants merge (`"GADEMER Antoine"` and `"Gademer Antoine"` are one entry). Questions are sorted by `question_id` in the template, which puts charts before free-text answers whatever the insertion order.
+`oceens.survey_loader_from_xlsx` is a command-line tool that imports a survey from a syllabus and a form export: `uv run python -m oceens.survey_loader_from_xlsx SYLLABUS FORMS PROGRAM SEMESTER YEAR`. The surveys it loads have no `QCU_Attendance` question, so `src/oceens/services/visualisation_data.py` falls back on `satisfaction_responses_count` as the denominator of the teacher score. Teacher names are normalised with `.title()` on import and on aggregation, so case variants merge (`"GADEMER Antoine"` and `"Gademer Antoine"` are one entry). Questions are sorted by `question_id` in the template, which puts charts before free-text answers whatever the insertion order.
 
 ### Campus manager scope
 
@@ -357,7 +351,7 @@ The `campus_manager` dashboard only shows closed surveys with at least one respo
 
 ### Cleaning up orphan students
 
-When a survey is deleted, the students no longer attached to **any other** survey are deleted too, so unused accounts do not pile up (`services/helpers.py`, `_delete_orphan_students`). A guard protects users with a privileged role (`admin`, `program_manager`, `facilitator`, `campus_manager`): a teacher or manager who answered a survey is never deleted.
+When a survey is deleted, the students no longer attached to **any other** survey are deleted too, so unused accounts do not pile up (`src/oceens/services/helpers.py`, `_delete_orphan_students`). A guard protects users with a privileged role (`admin`, `program_manager`, `facilitator`, `campus_manager`): a teacher or manager who answered a survey is never deleted.
 
 ### Adding a user by e-mail
 
@@ -369,59 +363,64 @@ The "Utilisateurs" tab of the administrator dashboard has a **"+ Ajouter un util
 
 ```
 OceENS/
-├── main.py                       # FastAPI factory, middlewares, router assembly
-├── sondage_loader.py             # Loads a full survey for the CSV export
-├── survey_loader_from_xlsx.py    # Command-line import of a survey from Excel files
-├── summaries_generator_daemon.py # LLM summaries, in a separate process
+├── pyproject.toml                # Package metadata, dependencies, entry points
+├── uv.lock                       # Locked dependency versions (committed)
+├── .python-version               # Python version used by uv
 ├── launch.sh                     # Production launch script (no Docker)
-├── requirements.txt              # Python dependencies
 ├── Dockerfile, docker-compose.yaml, .dockerignore
 ├── .env.example                  # Configuration reference; copy to .env (never committed)
 ├── CONTEXT.md                    # Domain glossary
 ├── Template_2025.md              # The end-of-semester survey template, as text
 │
-├── core/                         # Low-level access and security
-│   ├── auth.py                   #   Entra ID sign-in (login, logout, callback) and development sign-in
-│   ├── database.py               #   SQLite engine and the SessionDep dependency
-│   ├── security.py               #   Roles, scopes, access control
-│   ├── dependencies.py           #   Shared Jinja templates and logger
-│   └── seed.py                   #   Initial data and program synchronisation
+├── src/oceens/                   # The oceens package: all the application's code and files
+│   ├── main.py                   #   FastAPI factory, middlewares, router assembly; `oceens` entry point
+│   ├── sondage_loader.py         #   Loads a full survey for the CSV export
+│   ├── survey_loader_from_xlsx.py #  Command-line import of a survey from Excel files
+│   ├── summaries_generator_daemon.py # LLM summaries, in a separate process; `oceens-summaries-daemon`
+│   │
+│   ├── core/                     #   Low-level access and security
+│   │   ├── auth.py               #     Entra ID sign-in (login, logout, callback) and development sign-in
+│   │   ├── database.py           #     SQLite engine and the SessionDep dependency
+│   │   ├── security.py           #     Roles, scopes, access control
+│   │   ├── dependencies.py       #     Shared Jinja templates and logger
+│   │   └── seed.py               #     Initial data and program synchronisation
+│   │
+│   ├── models/                   #   SQLModel schema, one file per table
+│   │   ├── __init__.py           #     Re-exports every class (see its docstring)
+│   │   └── User.py, Survey.py, ...
+│   │
+│   ├── routers/                  #   Routes, split by business domain
+│   │   ├── pages.py              #     Home and per-role dashboards
+│   │   ├── surveys.py            #     Surveys: CRUD, status, export, visualisation
+│   │   ├── students.py           #     Enrolling students in a survey
+│   │   ├── users.py              #     User roles
+│   │   ├── summaries.py          #     Queuing LLM summaries
+│   │   ├── prompts.py            #     Prompt administration
+│   │   ├── survey_templates.py   #     Survey template administration
+│   │   ├── sections_questions.py #     Section and question administration
+│   │   └── llm/                  #     LLM administration
+│   │       ├── _access.py        #       Shared access control of the LLM screens
+│   │       ├── providers.py      #       LLM providers (CRUD and connection test)
+│   │       ├── prices.py         #       Price list per model
+│   │       └── costs.py          #       Overall and per-survey cost
+│   │
+│   ├── services/                 #   Business logic
+│   │   ├── helpers.py            #     Navigation, statistics, filters, sorting
+│   │   ├── visualisation_data.py #     Aggregations and visualisation context
+│   │   ├── llm_client.py         #     Multi-provider LLM client (ollama/openai/anthropic)
+│   │   ├── llm_costs.py          #     Summary cost (measured tokens × price list)
+│   │   ├── settings_store.py     #     Application settings (exchange rate)
+│   │   └── export_csv.py         #     CSV export of the answers
+│   │
+│   ├── templates/                #   Jinja2 templates: index.html, dashboard/, backend/, template_parts/
+│   ├── static/                   #   css/, js/, img/
+│   └── import/                   #   Program list and demonstration answers read by the seed
 │
-├── models/                       # SQLModel schema, one file per table
-│   ├── __init__.py               #   Re-exports every class (see its docstring)
-│   └── User.py, Survey.py, ...
-│
-├── routers/                      # Routes, split by business domain
-│   ├── pages.py                  #   Home and per-role dashboards
-│   ├── surveys.py                #   Surveys: CRUD, status, export, visualisation
-│   ├── students.py               #   Enrolling students in a survey
-│   ├── users.py                  #   User roles
-│   ├── summaries.py              #   Queuing LLM summaries
-│   ├── prompts.py                #   Prompt administration
-│   ├── survey_templates.py       #   Survey template administration
-│   ├── sections_questions.py     #   Section and question administration
-│   └── llm/                      #   LLM administration
-│       ├── _access.py            #     Shared access control of the LLM screens
-│       ├── providers.py          #     LLM providers (CRUD and connection test)
-│       ├── prices.py             #     Price list per model
-│       └── costs.py              #     Overall and per-survey cost
-│
-├── services/                     # Business logic
-│   ├── helpers.py                #   Navigation, statistics, filters, sorting
-│   ├── visualisation_data.py     #   Aggregations and visualisation context
-│   ├── llm_client.py             #   Multi-provider LLM client (ollama/openai/anthropic)
-│   ├── llm_costs.py              #   Summary cost (measured tokens × price list)
-│   ├── settings_store.py         #   Application settings (exchange rate)
-│   └── export_csv.py             #   CSV export of the answers
-│
-├── templates/                    # Jinja2 templates: index.html, dashboard/, backend/, template_parts/
-├── static/                       # css/, js/, img/
-├── import/                       # Program list and demonstration answers read by the seed
 ├── docs/                         # Smoke test, ADRs, agent docs
 ├── llm-utils/                    # LLM tools outside the application
 │
 ├── database/                     # SQLite database, created at startup (ignored by Git)
-└── .venv/                        # Python virtual environment (ignored by Git)
+└── .venv/                        # Virtual environment created by uv sync (ignored by Git)
 ```
 
 ---

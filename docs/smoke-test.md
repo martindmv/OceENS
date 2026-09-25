@@ -6,7 +6,7 @@ Run it before proposing a change that touches startup, configuration, dependenci
 
 ## Per-system conventions
 
-Commands are given for **Windows (PowerShell)**, then for **macOS / Linux (bash)**. Only four things change:
+It needs [uv](https://docs.astral.sh/uv/getting-started/installation/), which installs the Python version in `.python-version` if it is missing, and the dependencies from `uv.lock`. Commands are given for **Windows (PowerShell)**, then for **macOS / Linux (bash)**. Only four things change:
 
 | | Windows (PowerShell) | macOS / Linux (bash) |
 |---|---|---|
@@ -22,30 +22,28 @@ The commands call the interpreter **by its path** (`.venv\Scripts\python.exe`) i
 The same on both systems (one line, no continuation):
 
 ```
-python -m compileall -q main.py sondage_loader.py survey_loader_from_xlsx.py summaries_generator_daemon.py core models routers services
+uv run python -m compileall -q src
 git diff --check
 ```
 
 ## 1. Local start, no credentials
 
-In a fresh clone of the branch, with an empty virtual environment.
+In a fresh clone of the branch, with no `.venv`. `uv sync` creates it and installs the `oceens` package into it; the start command then works from any working directory.
 
 **Windows (PowerShell)**
 
 ```powershell
 Copy-Item .env.example .env
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\uvicorn.exe main:app --port 8000
+uv sync
+uv run uvicorn oceens.main:app --port 8000
 ```
 
 **macOS / Linux (bash)**
 
 ```bash
 cp .env.example .env
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn main:app --port 8000
+uv sync
+uv run uvicorn oceens.main:app --port 8000
 ```
 
 Expected, with no Entra credential and no LLM key:
@@ -87,19 +85,19 @@ An invalid startup configuration must exit with **code 1**, so that a supervisor
 ```powershell
 # Invalid AUTH_MODE
 $env:AUTH_MODE = "bogus"
-.venv\Scripts\python.exe -c "import main"; $LASTEXITCODE   # 1
+.venv\Scripts\python.exe -c "import oceens.main"; $LASTEXITCODE   # 1
 Remove-Item Env:AUTH_MODE
 
 # Missing ENTRA_*, without .env
 Rename-Item .env .env.bak
 'AUTH_MODE','ENTRA_CLIENT_ID','ENTRA_CLIENT_SECRET','ENTRA_TENANT_ID' |
   ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
-.venv\Scripts\python.exe -c "import main"; $LASTEXITCODE   # 1
+.venv\Scripts\python.exe -c "import oceens.main"; $LASTEXITCODE   # 1
 
 # Missing SECRET_KEY in entra, without .env
 $env:ENTRA_CLIENT_ID = "x"; $env:ENTRA_CLIENT_SECRET = "x"; $env:ENTRA_TENANT_ID = "x"
 Remove-Item Env:SECRET_KEY -ErrorAction SilentlyContinue
-.venv\Scripts\python.exe -c "import main"; $LASTEXITCODE   # 1
+.venv\Scripts\python.exe -c "import oceens.main"; $LASTEXITCODE   # 1
 'ENTRA_CLIENT_ID','ENTRA_CLIENT_SECRET','ENTRA_TENANT_ID' |
   ForEach-Object { Remove-Item "Env:$_" }
 Rename-Item .env.bak .env
@@ -109,16 +107,16 @@ Rename-Item .env.bak .env
 
 ```bash
 # Invalid AUTH_MODE
-AUTH_MODE=bogus .venv/bin/python -c "import main"; echo $?   # 1
+AUTH_MODE=bogus .venv/bin/python -c "import oceens.main"; echo $?   # 1
 
 # Missing ENTRA_*, without .env
 mv .env .env.bak
 env -u AUTH_MODE -u ENTRA_CLIENT_ID -u ENTRA_CLIENT_SECRET -u ENTRA_TENANT_ID \
-  .venv/bin/python -c "import main"; echo $?   # 1
+  .venv/bin/python -c "import oceens.main"; echo $?   # 1
 
 # Missing SECRET_KEY in entra, without .env
 env -u AUTH_MODE -u SECRET_KEY ENTRA_CLIENT_ID=x ENTRA_CLIENT_SECRET=x ENTRA_TENANT_ID=x \
-  .venv/bin/python -c "import main"; echo $?   # 1
+  .venv/bin/python -c "import oceens.main"; echo $?   # 1
 mv .env.bak .env
 ```
 
@@ -126,7 +124,7 @@ Expected: the log line `INVALID AUTH_MODE 'bogus'` for the first case, `MISSING 
 
 ## 4. No LLM key
 
-`.env.example` ships `LLM_API_KEY` **empty**: the application starts normally, and only summaries are unavailable. With the `summaries_generator_daemon.py` daemon running, a summary request is marked as a configuration error (`http_status` 500, "variable d'environnement absente ou vide") and no call is made to the provider.
+`.env.example` ships `LLM_API_KEY` **empty**: the application starts normally, and only summaries are unavailable. With the summaries daemon running (`uv run oceens-summaries-daemon`), a summary request is marked as a configuration error (`http_status` 500, "variable d'environnement absente ou vide") and no call is made to the provider.
 
 ## 5. With an LLM key
 
@@ -136,7 +134,7 @@ Each student gets their own key at <https://locallm.mde.epf.fr> by signing in wi
 LLM_API_KEY=<your key>
 ```
 
-Quick check, without the interface. **The key must be in this command's environment, not only in `.env`**: `load_dotenv()` is called by the application, by the daemon and by the authentication module, but not by `services/llm_client.py`, the only module imported here. Without the prefix below, the command raises `LLMConfigError` whatever `.env` holds.
+Quick check, without the interface. **The key must be in this command's environment, not only in `.env`**: `load_dotenv()` is called by the application, by the daemon and by the authentication module, but not by `oceens.services.llm_client`, the only module imported here. Without the prefix below, the command raises `LLMConfigError` whatever `.env` holds.
 
 The `python -c` line fits on one line and is the same on both systems; only the interpreter's path and the way to set the variable change.
 
@@ -144,19 +142,19 @@ The `python -c` line fits on one line and is the same on both systems; only the 
 
 ```powershell
 $env:LLM_API_KEY = "<your key>"
-.venv\Scripts\python.exe -c "from types import SimpleNamespace; from services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
+.venv\Scripts\python.exe -c "from types import SimpleNamespace; from oceens.services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
 Remove-Item Env:LLM_API_KEY
 ```
 
 **macOS / Linux (bash)**
 
 ```bash
-LLM_API_KEY=<your key> .venv/bin/python -c "from types import SimpleNamespace; from services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
+LLM_API_KEY=<your key> .venv/bin/python -c "from types import SimpleNamespace; from oceens.services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
 ```
 
 Expected: `True`, then `(True, None, None)`. `check_model` alone is not enough: the model list still answers normally for an account with no credit, and only a generation call reveals it. With an empty value, or without the variable, the same command raises `LLMConfigError`: that is step 4's behaviour.
 
-Then, end to end: request a survey's summaries with `summaries_generator_daemon.py` running. That half does not need the prefix: the daemon reads `.env` itself. Rows go from `http_status` 0 to 200, one at a time (the daemon is sequential), and the summary shows as HTML. Never commit the key: `.env` is ignored by Git.
+Then, end to end: request a survey's summaries with the summaries daemon running (`uv run oceens-summaries-daemon`). That half does not need the prefix: the daemon reads `.env` itself. Rows go from `http_status` 0 to 200, one at a time (the daemon is sequential), and the summary shows as HTML. Never commit the key: `.env` is ignored by Git.
 
 ## Next
 

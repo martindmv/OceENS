@@ -7,7 +7,11 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # Chemin dans le conteneur, qui l'emporte sur LOCAL_DATABASE_DIR de .env :
+      # celui-ci désigne le dossier de l'hôte monté ci-dessous.
+      LOCAL_DATABASE_DIR: /app/database
     volumes:
       - ${LOCAL_DATABASE_DIR:-./database}:/app/database
-      - ./import:/app/import
+      - ./src/oceens/import:/app/.venv/lib/python3.12/site-packages/oceens/import
     restart: always
