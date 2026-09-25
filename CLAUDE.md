@@ -11,3 +11,5 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+- Package boundaries are machine-checked: read `src/oceens/README.md` before adding a package, or importing across one.

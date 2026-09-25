@@ -366,6 +366,8 @@ OceENS/
 ├── pyproject.toml                # Package metadata, dependencies, entry points
 ├── uv.lock                       # Locked dependency versions (committed)
 ├── .python-version               # Python version used by uv
+├── tach.toml                     # Package boundary rules checked by `tach check`
+├── scripts/check_cycles.py       # Rejects import cycles between packages
 ├── launch.sh                     # Production launch script (no Docker)
 ├── Dockerfile, docker-compose.yaml, .dockerignore
 ├── .env.example                  # Configuration reference; copy to .env (never committed)
@@ -373,6 +375,7 @@ OceENS/
 ├── Template_2025.md              # The end-of-semester survey template, as text
 │
 ├── src/oceens/                   # The oceens package: all the application's code and files
+│   ├── README.md                 #   Package conventions: what the boundary check enforces
 │   ├── main.py                   #   FastAPI factory, middlewares, router assembly; `oceens` entry point
 │   ├── sondage_loader.py         #   Loads a full survey for the CSV export
 │   ├── survey_loader_from_xlsx.py #  Command-line import of a survey from Excel files
@@ -440,7 +443,14 @@ OceENS/
 
 ## Before contributing
 
-There is no automated test suite nor CI yet (#85, #78). Before proposing a change, run the [smoke test](docs/smoke-test.md): its static checks, then the steps your change touches. Then test the affected routes by hand on a throwaway SQLite database (never a copy of production), with the relevant roles and survey statuses.
+There is no automated test suite nor CI yet (#85, #78). Before proposing a change, run the [smoke test](docs/smoke-test.md): its static checks, then the steps your change touches.
+
+Package boundaries are checked (see [`src/oceens/README.md`](src/oceens/README.md)): no name starting with `_` imported from outside its package, and no import cycle between packages. Both checks must pass:
+
+```bash
+uv run tach check
+uv run python scripts/check_cycles.py
+``` Then test the affected routes by hand on a throwaway SQLite database (never a copy of production), with the relevant roles and survey statuses.
 
 ---
 
