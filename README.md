@@ -131,7 +131,10 @@ On an empty database, the seed (`core/seed.py`) inserts four surveys with answer
 | `arnaud.jousset@epf.fr`, `etienne.gibaud@epf.fr` | `admin` only |
 | `antoine.gademer@epf.fr` | `admin`, `program_manager:MDAI5` |
 | `yassine.gharbi@epfedu.fr` | `admin`, `campus_manager:Montpellier` |
-| `bob.leponge@epfedu.fr` and 19 others | none (student) |
+| `oceens.facilitator@epf.fr` | `facilitator:MDAI5` only |
+| `oceens.program-manager@epf.fr` | `program_manager:MDAI5` only |
+| `oceens.campus-manager@epf.fr` | `campus_manager:Montpellier` only |
+| `bob.leponge@epfedu.fr` and 17 others | none (student) |
 
 Programs are synchronised from `import/Program_list.csv` at every start; the rest is seeded only when the database has no user.
 
