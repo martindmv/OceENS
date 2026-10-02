@@ -10,6 +10,8 @@ import re
 import pandas as pd
 from fastapi.responses import Response
 
+from oceens.core.auth import _name_from_email
+
 
 # Colonnes du CSV exporté, dans l'ordre d'affichage
 EXPORT_COLUMNS = [
