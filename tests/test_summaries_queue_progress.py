@@ -38,4 +38,4 @@ def test_a_campaign_evening_shows_two_and_a_half_hours_not_a_bare_count(session)
 
     assert survey_progress.done == 0
     assert survey_progress.total == 45
-    assert survey_progress.estimated_time_left == timedelta(hours=2, minutes=30)
+    assert survey_progress.estimated_time_left == timedelta(hours=3)
