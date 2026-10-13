@@ -736,16 +736,16 @@ checklist's `AUTH_MODE` line.
   `DEFAULT_PROVIDER_BASE_URL=https://api.mistral.ai/v1`,
   `DEFAULT_PROVIDER_MODEL=ministral-14b-latest`, `DEFAULT_PROVIDER_KEY_ENV=MISTRAL_API_KEY`.
   The provider row keeps its name, « Ollama EPF ».
-- **Green means it answers.** After setting the image, the job waits up to 700 s for
-  `/dev/login` to answer `200`, and fails otherwise.
+- **Green means the new version answers.** The image holds its commit as `REVISION`, which
+  the application sends back in the `X-Revision` header of every response. After setting
+  the image, the job waits up to 700 s for `/dev/login` to answer `200` with that commit,
+  and fails otherwise: a previous container still answering does not count.
 
 ### Known limits
 
 - **The data is reset at every deploy and every platform restart.** SQLite cannot take its
   locks on `/home`, App Service's network share, so the database lives on the container's
   disk and is seeded again at each start.
-- **A `200` may still come from the previous container**, which App Service keeps serving
-  until the new one has started or failed.
 
 ---
 
