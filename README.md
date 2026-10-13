@@ -714,7 +714,9 @@ duplicates are refused.
 ## How this fork is deployed
 
 `.github/workflows/architecture.yml` deploys this fork to **Fork staging**, an Azure App
-Service app. Staging holds generated data and no real users, so it signs in through the
+Service app on a Basic B1 plan, always on, shared with Fork production. The plan is in
+**Germany West Central**, not France Central: the Azure for Students subscription's policy
+refuses France Central. Staging holds generated data and no real users, so it signs in through the
 [dev sign-in](#dev-sign-in), guarded by its own `DEV_LOGIN_KEY`: the one exception to the
 checklist's `AUTH_MODE` line.
 
