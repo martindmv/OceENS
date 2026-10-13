@@ -723,8 +723,9 @@ refuses France Central. Staging holds generated data and no real users, so it si
 [dev sign-in](#dev-sign-in), guarded by its own `DEV_LOGIN_KEY`: the one exception to the
 checklist's `AUTH_MODE` line.
 
-- **On green only.** A push to the fork's default branch runs `architecture` and `test`;
-  `deploy to staging` needs both. Pull requests and red runs deploy nothing.
+- **On green only.** A push to the fork's default branch, `course-2026-fallback-clean-bench`,
+  named in the job's `if:`, runs `architecture` and `test`; `deploy to staging` needs both.
+  Pull requests and red runs deploy nothing.
 - **One image per commit.** The job builds the image, tags it with the commit and pushes
   it to GHCR (`ghcr.io/<owner>/oceens:<commit>`). A commit pushed twice is built once.
 - **Settings from the GitHub Environment.** The job runs as the `staging` Environment and
