@@ -20,3 +20,129 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv sync --locked
       - run: uv run pytest
+
+  # A push to the fork's default branch whose checks all passed is built into
+  # one image, tagged with its commit, and deployed to Fork staging. Never on a
+  # pull request, never on a red run.
+  deploy-staging:
+    name: deploy to staging
+    needs: [architecture, test]
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    # One deploy at a time, in the order pushed.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    environment:
+      name: staging
+      url: https://${{ vars.AZURE_WEBAPP_NAME }}.azurewebsites.net
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # One image per commit, tagged with it: a commit pushed twice is built once.
+      - name: Build and push the image, unless it exists
+        id: image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_SHA"
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "$image already built"
+          else
+            docker build \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              -t "$image" .
+            docker push "$image"
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      # OpenID Connect, as the `staging` GitHub Environment: no Azure password stored.
+      - name: Log in to Azure
+        uses: azure/login@v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Written at every deploy, so the GitHub Environment stays the one place a
+      # setting is changed. --output none: the command would otherwise print
+      # every setting back, secrets included.
+      #
+      # - WEBSITES_PORT: uvicorn listens on 8000, not on the 80 App Service expects.
+      # - WEBSITES_ENABLE_APP_SERVICE_STORAGE=false: SQLite cannot lock on /home,
+      #   a network share; the database lives on the container's disk instead.
+      # - RUN_SUMMARIES_DAEMON=1: launch.sh started `oceens` and `oceens-summaries`;
+      #   the image starts `oceens` only, which then starts the daemon itself.
+      # - DEFAULT_PROVIDER_*: the default provider row keeps its name and points
+      #   at Mistral, its key read from MISTRAL_API_KEY. Only a fresh database
+      #   reads them, which every start of this container is.
+      - name: Write staging's settings
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+          DEV_LOGIN_KEY: ${{ secrets.DEV_LOGIN_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          az webapp config appsettings set \
+            --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none \
+            --settings \
+              WEBSITES_PORT=8000 \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
+              RUN_SUMMARIES_DAEMON=1 \
+              AUTH_MODE=dev \
+              "DEV_LOGIN_KEY=$DEV_LOGIN_KEY" \
+              "SECRET_KEY=$SECRET_KEY" \
+              "MISTRAL_API_KEY=$MISTRAL_API_KEY" \
+              DEFAULT_PROVIDER_API_TYPE=openai \
+              DEFAULT_PROVIDER_BASE_URL=https://api.mistral.ai/v1 \
+              DEFAULT_PROVIDER_MODEL=ministral-14b-latest \
+              DEFAULT_PROVIDER_KEY_ENV=MISTRAL_API_KEY
+
+      - name: Run the image
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          az webapp config container set \
+            --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none \
+            --container-image-name "$IMAGE"
+          running=$(az webapp config show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --query linuxFxVersion --output tsv)
+          if [ "$running" != "DOCKER|$IMAGE" ]; then
+            echo "$APP_NAME is set to $running, not $IMAGE" >&2
+            exit 1
+          fi
+          echo "$APP_NAME now runs $IMAGE"
+
+      # The limit is EPF-MDE/OceENS#169's: twice the slowest start it measured
+      # on the shared B1 plan (350 s), most of it pulling the image.
+      - name: Wait until the app answers
+        env:
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+        run: |
+          url="https://$APP_NAME.azurewebsites.net/dev/login"
+          limit=700
+          start=$(date +%s)
+          attempt=0
+          while true; do
+            attempt=$((attempt + 1))
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url" || true)
+            elapsed=$(( $(date +%s) - start ))
+            if [ "$code" = 200 ]; then
+              echo "$url answers 200, ${elapsed} s after the image was set"
+              exit 0
+            fi
+            echo "Attempt $attempt, ${elapsed} s: $url answered ${code:-nothing}"
+            if [ "$elapsed" -ge "$limit" ]; then
+              echo "$url did not answer 200 within $limit s" >&2
+              exit 1
+            fi
+            sleep 15
+          done
