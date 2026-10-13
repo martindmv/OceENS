@@ -711,6 +711,42 @@ duplicates are refused.
 
 ---
 
+## How this fork is deployed
+
+`.github/workflows/architecture.yml` deploys this fork to **Fork staging**, an Azure App
+Service app. Staging holds generated data and no real users, so it signs in through the
+[dev sign-in](#dev-sign-in), guarded by its own `DEV_LOGIN_KEY`: the one exception to the
+checklist's `AUTH_MODE` line.
+
+- **On green only.** A push to the fork's default branch runs `architecture` and `test`;
+  `deploy to staging` needs both. Pull requests and red runs deploy nothing.
+- **One image per commit.** The job builds the image, tags it with the commit and pushes
+  it to GHCR (`ghcr.io/<owner>/oceens:<commit>`). A commit pushed twice is built once.
+- **Settings from the GitHub Environment.** The job runs as the `staging` Environment and
+  writes its settings to the app at every deploy, with `--output none` so no value reaches
+  the log. Secrets: `DEV_LOGIN_KEY`, `SECRET_KEY`, `MISTRAL_API_KEY`. Variables:
+  `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (OpenID Connect login, no
+  password stored), `AZURE_RESOURCE_GROUP`, `AZURE_WEBAPP_NAME`. Written alongside them:
+  `AUTH_MODE=dev`, `RUN_SUMMARIES_DAEMON=1` (the container is the only process, so it
+  starts the summaries daemon itself, as `launch.sh` started both), `WEBSITES_PORT=8000`,
+  `WEBSITES_ENABLE_APP_SERVICE_STORAGE=false`, and the default provider pointed at
+  Mistral: `DEFAULT_PROVIDER_API_TYPE=openai`,
+  `DEFAULT_PROVIDER_BASE_URL=https://api.mistral.ai/v1`,
+  `DEFAULT_PROVIDER_MODEL=ministral-14b-latest`, `DEFAULT_PROVIDER_KEY_ENV=MISTRAL_API_KEY`.
+  The provider row keeps its name, « Ollama EPF ».
+- **Green means it answers.** After setting the image, the job waits up to 700 s for
+  `/dev/login` to answer `200`, and fails otherwise.
+
+### Known limits
+
+- **The data is reset at every deploy and every platform restart.** SQLite cannot take its
+  locks on `/home`, App Service's network share, so the database lives on the container's
+  disk and is seeded again at each start.
+- **A `200` may still come from the previous container**, which App Service keeps serving
+  until the new one has started or failed.
+
+---
+
 ## Validating a change
 
 The automated tests are still few (`uv run pytest`) and there is no CI, so behaviour is
